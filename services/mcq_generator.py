@@ -8,7 +8,7 @@ from models.schemas import MCQQuestion
 class MCQGenerator:
     def __init__(self):
         self.client = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
-        self.model = "llama3-70b-8192"  # You can change this to other Groq models
+        self.model = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")  # You can change this to other Groq models
     
     async def generate_from_text(self, text: str, num_questions: int = 5, difficulty: str = "medium") -> List[MCQQuestion]:
         """Generate MCQs from provided text content"""

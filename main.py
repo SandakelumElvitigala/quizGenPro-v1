@@ -1,3 +1,7 @@
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -54,48 +58,176 @@ async def generate_mcq_from_pdf(
     difficulty: str = Form("medium")
 ):
     """Generate MCQs from uploaded PDF file"""
+
+    file_path = None
+
     try:
-        # Validate file type
-        if not file.filename.endswith('.pdf'):
-            raise HTTPException(status_code=400, detail="Only PDF files are allowed")
-        
-        # Save uploaded file
-        file_path = f"uploads/{file.filename}"
+        print("\n" + "=" * 60)
+        print("[DEBUG] /generate-from-pdf started")
+        print("=" * 60)
+
+        # --------------------------------------------------
+        # 1. Validate file
+        # --------------------------------------------------
+
+        print(f"[DEBUG] File name: {file.filename}")
+        print(f"[DEBUG] Number of questions: {num_questions}")
+        print(f"[DEBUG] Difficulty: {difficulty}")
+
+        if not file.filename:
+            raise HTTPException(
+                status_code=400,
+                detail="No file was provided"
+            )
+
+        if not file.filename.lower().endswith(".pdf"):
+            raise HTTPException(
+                status_code=400,
+                detail="Only PDF files are allowed"
+            )
+
+        # --------------------------------------------------
+        # 2. Save uploaded PDF
+        # --------------------------------------------------
+
+        os.makedirs("uploads", exist_ok=True)
+
+        file_path = os.path.join(
+            "uploads",
+            file.filename
+        )
+
+        print(f"[DEBUG] Saving PDF to: {file_path}")
+
+        content = await file.read()
+
+        if not content:
+            raise HTTPException(
+                status_code=400,
+                detail="Uploaded PDF is empty"
+            )
+
         with open(file_path, "wb") as buffer:
-            content = await file.read()
             buffer.write(content)
-        
-        # Extract text from PDF
+
+        print(f"[DEBUG] PDF saved successfully")
+        print(f"[DEBUG] PDF size: {len(content)} bytes")
+
+        # --------------------------------------------------
+        # 3. Extract PDF text
+        # --------------------------------------------------
+
+        print("[DEBUG] Extracting text from PDF...")
+
         text_content = pdf_processor.extract_text(file_path)
-        if not text_content.strip():
-            raise HTTPException(status_code=400, detail="Could not extract text from PDF")
-        
-        # Generate MCQs
+
+        print(
+            f"[DEBUG] Extracted text length: "
+            f"{len(text_content) if text_content else 0}"
+        )
+
+        if not text_content or not text_content.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="Could not extract text from PDF"
+            )
+
+        # --------------------------------------------------
+        # 4. Generate MCQs using Groq
+        # --------------------------------------------------
+
+        print("[DEBUG] Sending text to MCQ generator...")
+
         mcqs = await mcq_generator.generate_from_text(
-            text_content, 
-            num_questions, 
+            text_content,
+            num_questions,
             difficulty
         )
-        
-        # Create output PDF
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        print(
+            f"[DEBUG] MCQ generation completed. "
+            f"Generated: {len(mcqs)} questions"
+        )
+
+        # --------------------------------------------------
+        # 5. Create output PDF
+        # --------------------------------------------------
+
+        os.makedirs("outputs", exist_ok=True)
+
+        timestamp = datetime.now().strftime(
+            "%Y%m%d_%H%M%S"
+        )
+
         output_filename = f"mcq_output_{timestamp}.pdf"
-        output_path = f"outputs/{output_filename}"
-        
-        pdf_creator.create_mcq_pdf(mcqs, output_path, source=f"PDF: {file.filename}")
-        
-        # Clean up uploaded file
-        os.remove(file_path)
-        
-        return MCQResponse(
+
+        output_path = os.path.join(
+            "outputs",
+            output_filename
+        )
+
+        print(f"[DEBUG] Creating output PDF: {output_path}")
+
+        pdf_creator.create_mcq_pdf(
+            mcqs,
+            output_path,
+            source=f"PDF: {file.filename}"
+        )
+
+        print("[DEBUG] Output PDF created successfully")
+
+        # --------------------------------------------------
+        # 6. Remove uploaded PDF
+        # --------------------------------------------------
+
+        if file_path and os.path.exists(file_path):
+            os.remove(file_path)
+            print("[DEBUG] Temporary uploaded PDF removed")
+
+        # --------------------------------------------------
+        # 7. Return response
+        # --------------------------------------------------
+
+        response = MCQResponse(
             questions=mcqs,
             download_url=f"/download/{output_filename}",
             total_questions=len(mcqs)
         )
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
+        print("[DEBUG] Request completed successfully")
+        print("=" * 60)
+
+        return response
+
+    except HTTPException:
+        # Keep our intentional HTTP errors
+        raise
+
+    except Exception as e:
+        import traceback
+
+        print("\n" + "=" * 60)
+        print("[ERROR] /generate-from-pdf FAILED")
+        print("=" * 60)
+        print(f"Error type: {type(e).__name__}")
+        print(f"Error message: {str(e)}")
+        print("\nFULL TRACEBACK:")
+        traceback.print_exc()
+        print("=" * 60)
+
+        # Clean up uploaded file if something failed
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+                print("[DEBUG] Temporary PDF removed after error")
+            except Exception:
+                pass
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"{type(e).__name__}: {str(e)}"
+        )
+        
 @app.post("/generate-from-topic", response_model=MCQResponse)
 async def generate_mcq_from_topic(request: MCQRequest):
     """Generate MCQs from a given topic"""
